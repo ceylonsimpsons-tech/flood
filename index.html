@@ -3,110 +3,78 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kelani Flood Analysis</title>
+    <title>Kelani Flood Map</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background: #222; }
+        body, html { margin: 0; padding: 0; height: 100%; background: #1a1a1a; }
         #map { height: 100vh; width: 100%; }
-        /* Loading Spinner */
-        .loader {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8); color: white; padding: 20px;
-            border-radius: 8px; font-family: sans-serif; z-index: 9999; display: none;
+        .error-msg {
+            position: absolute; top: 10px; left: 50px; z-index: 9999;
+            background: white; padding: 15px; border-left: 5px solid red;
+            display: none; font-family: sans-serif; box-shadow: 0 0 10px rgba(0,0,0,0.5);
         }
     </style>
 </head>
 <body>
 
-    <div id="loader" class="loader">Loading Satellite Data...</div>
+    <div id="error-box" class="error-msg"></div>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browserify.min.js"></script>
-    <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
 
     <script>
-        // Files to load
-        const GEOJSON_FILE = 'kelani.geojson';
-        const TIFF_FILE = 'sentinel_2025-11-30.tif';
-
         // 1. Initialize Map
-        const map = L.map('map').setView([6.93, 79.86], 10);
-        
-        // Base Map (Dark mode for better contrast)
-        const baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap &copy; CARTO'
+        const map = L.map('map').setView([6.93, 79.86], 11); // Default center (Colombo)
+
+        // 2. Add Satellite Layer
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri',
+            maxZoom: 19
         }).addTo(map);
 
-        const layerControl = L.control.layers({ "Base Map": baseLayer }, {}, { collapsed: false }).addTo(map);
+        // 3. Load GeoJSON
+        const geojsonFile = 'kelani.geojson';
 
-        // 2. Load GeoJSON (The Polygon)
-        fetch(GEOJSON_FILE)
-            .then(r => r.ok ? r.json() : null)
-            .then(data => {
-                if(data) {
-                    const layer = L.geoJSON(data, {
-                        style: { color: '#00ccff', weight: 2, fillOpacity: 0.1 }
-                    }).addTo(map);
-                    layerControl.addOverlay(layer, "Kelani Flood Area");
-                    map.fitBounds(layer.getBounds()); // Zoom to polygon initially
-                }
+        fetch(geojsonFile)
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status} - File not found`);
+                return response.json();
             })
-            .catch(e => console.error("GeoJSON Error:", e));
-
-        // 3. Load Sentinel TIFF (The Raster)
-        async function loadTif() {
-            const loader = document.getElementById('loader');
-            loader.style.display = 'block';
-
-            try {
-                const response = await fetch(TIFF_FILE);
-                if (!response.ok) throw new Error("TIFF not found");
-                
-                const arrayBuffer = await response.arrayBuffer();
-                const georaster = await parseGeoraster(arrayBuffer);
-
-                const layer = new GeoRasterLayer({
-                    georaster: georaster,
-                    opacity: 1.0,
-                    resolution: 64, // Lower number = higher quality but slower
-                    pixelValuesToColorFn: values => {
-                        // Simple grayscale mapping for single band
-                        // If you have RGB, values[0]=R, values[1]=G, values[2]=B
-                        if (values[0] === 0 || isNaN(values[0])) return null; // No Data
-                        
-                        // Sentinel data is often 16-bit (0-65535). 
-                        // We scale it down to 8-bit (0-255) for display.
-                        // Adjust the divider (30) depending on how bright your image is.
-                        let val = values[0];
-                        if (values.length >= 3) {
-                             // RGB Logic
-                             const r = Math.min(values[0] / 12, 255); 
-                             const g = Math.min(values[1] / 12, 255);
-                             const b = Math.min(values[2] / 12, 255);
-                             return `rgb(${r},${g},${b})`;
-                        } else {
-                            // Grayscale Logic
-                            let scaled = Math.min(val / 15, 255); 
-                            return `rgba(${scaled},${scaled},${scaled}, 1)`;
+            .then(data => {
+                // Style the polygon
+                const layer = L.geoJSON(data, {
+                    style: {
+                        color: '#00ccff',     // Neon Blue
+                        weight: 2,
+                        fillColor: '#00ccff',
+                        fillOpacity: 0.4
+                    },
+                    onEachFeature: (feature, layer) => {
+                        if (feature.properties) {
+                            let popup = '<div style="font-family:sans-serif; color:#333;">';
+                            for (const [key, val] of Object.entries(feature.properties)) {
+                                popup += `<b>${key}:</b> ${val}<br>`;
+                            }
+                            popup += '</div>';
+                            layer.bindPopup(popup);
                         }
                     }
-                });
-                
-                layer.addTo(map);
-                layerControl.addOverlay(layer, "Sentinel 2025-11-30");
-                console.log("TIFF Loaded");
+                }).addTo(map);
 
-            } catch (e) {
-                console.error("TIFF Error:", e);
-                alert("Could not load TIFF. Check console for details.");
-            } finally {
-                loader.style.display = 'none';
-            }
-        }
-
-        loadTif();
-
+                // Auto-zoom to the polygon
+                map.fitBounds(layer.getBounds());
+            })
+            .catch(err => {
+                console.error(err);
+                const errorBox = document.getElementById('error-box');
+                errorBox.style.display = 'block';
+                errorBox.innerHTML = `
+                    <h3>⚠️ Map Error</h3>
+                    <p>Could not load <b>${geojsonFile}</b>.</p>
+                    <p><b>Details:</b> ${err.message}</p>
+                    <p>Make sure <code>${geojsonFile}</code> is in the same folder and committed to GitHub.</p>
+                `;
+            });
     </script>
 </body>
 </html>
