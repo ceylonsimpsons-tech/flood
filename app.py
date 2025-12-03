@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-app.py - Generates a self-contained HTML map.
+app.py - Generates index.html with EMBEDDED GeoJSON.
 
-Changes:
-1. Reads 'kelani.geojson' during generation.
-2. Embeds the data directly into index.html (No more fetch errors!).
-3. Checks if your coordinates are valid (Lat/Lon) automatically.
+Usage:
+  1. python app.py
+  2. Upload 'index.html' to GitHub.
+  3. Delete 'vercel.json' (it is not needed).
 """
 
 import sys
@@ -15,133 +15,117 @@ import webbrowser
 import http.server
 import socketserver
 
+# Config
 GEOJSON_FILE = "kelani.geojson"
 INDEX_FILE = "index.html"
-VERCEL_FILE = "vercel.json"
 
 def get_geojson_content():
-    """Reads the GeoJSON file and returns it as a JSON string."""
+    """Reads GeoJSON and returns it as a string to embed."""
     path = Path(GEOJSON_FILE)
     if not path.exists():
-        print(f"[ERROR] Could not find {GEOJSON_FILE}")
+        print(f"❌ [ERROR] '{GEOJSON_FILE}' not found.")
+        print("   Make sure the file is in this folder.")
         sys.exit(1)
     
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # --- PROJECTION CHECK ---
-        # We check the first coordinate to see if it looks like meters (wrong) or lat/lon (correct).
-        try:
-            # Drill down to find the first coordinate number
-            feature = data['features'][0]
-            geom = feature['geometry']
-            coords = geom['coordinates']
-            
-            # Unwrap nested arrays until we find a number
-            while isinstance(coords, list) and len(coords) > 0 and isinstance(coords[0], list):
-                coords = coords[0]
-            
-            first_val = coords[0] if isinstance(coords, list) and len(coords) > 0 else 0
-
-            if first_val > 180:
-                print("\n[WARNING] ⚠️  YOUR COORDINATES LOOK WRONG!")
-                print(f"   Value found: {first_val}")
-                print("   The map expects Latitude/Longitude (WGS84).")
-                print("   If you see a blank map, re-export from QGIS as 'EPSG:4326'.\n")
-        except Exception as e:
-            pass # Skip check if structure is complex
-            
-        return json.dumps(data)
+            return json.dumps(data)
     except Exception as e:
-        print(f"[ERROR] Invalid JSON in {GEOJSON_FILE}: {e}")
+        print(f"❌ [ERROR] Could not read JSON: {e}")
         sys.exit(1)
 
-def write_index_html(geojson_string):
-    html_content = f"""<!doctype html>
+def write_index_html(json_data):
+    """Writes the HTML file with the data inside it."""
+    html = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Kelani Map</title>
+  <title>Kelani Flood Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    body, html, #map {{ height: 100%; margin: 0; padding: 0; background: #222; }}
+    body, html, #map {{ height: 100%; margin: 0; padding: 0; background: #111; }}
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // 1. Initialize Map
+    // 1. Setup Map
     const map = L.map('map');
-
-    // 2. Add Satellite Layer
+    
+    // 2. Satellite Layer
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
-        attribution: 'Esri'
+        attribution: 'Esri',
+        maxZoom: 19
     }}).addTo(map);
 
-    // 3. Embed the GeoJSON Data directly
-    const geoData = {geojson_string};
+    // 3. YOUR DATA (Embedded)
+    const geoJsonData = {json_data};
 
-    // 4. Load Data to Map
-    const layer = L.geoJSON(geoData, {{
+    // 4. Add Polygon
+    const layer = L.geoJSON(geoJsonData, {{
         style: {{
-            color: '#00BFFF', 
-            weight: 2, 
-            fillColor: '#00BFFF', 
+            color: '#00ccff',      // Bright Cyan
+            weight: 3,
+            fillColor: '#00ccff',
             fillOpacity: 0.3
         }},
         onEachFeature: function(feature, layer) {{
             if (feature.properties) {{
-                let popup = '<div style="font-family:sans-serif; color:black;">';
+                let p = '<div style="color:black; font-family:sans-serif;">';
                 for (let k in feature.properties) {{
-                    popup += '<b>' + k + ':</b> ' + feature.properties[k] + '<br>';
+                    p += '<b>' + k + ':</b> ' + feature.properties[k] + '<br>';
                 }}
-                popup += '</div>';
-                layer.bindPopup(popup);
+                p += '</div>';
+                layer.bindPopup(p);
             }}
         }}
     }}).addTo(map);
 
-    // 5. Auto-zoom to fit the polygon
+    // 5. Auto Zoom
     map.fitBounds(layer.getBounds());
   </script>
 </body>
 </html>
 """
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        f.write(html_content)
+        f.write(html)
 
-def write_vercel_json():
-    config = {
-        "version": 2,
-        "builds": [{ "src": INDEX_FILE, "use": "@vercel/static" }],
-        "routes": [{ "src": "/(.*)", "dest": "/" + INDEX_FILE }]
-    }
-    with open(VERCEL_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+def serve_local():
+    port = 8000
+    handler = http.server.SimpleHTTPRequestHandler
+    print(f"\n🌍 Preview at http://localhost:{port}")
+    print("   (Press Ctrl+C to stop)")
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        webbrowser.open(f"http://localhost:{port}")
+        try: httpd.serve_forever()
+        except KeyboardInterrupt: pass
 
 def main():
-    print("--- Generating Map ---")
+    print("--- 🗺️  Map Generator ---")
     
-    # Get content
-    json_str = get_geojson_content()
+    # 1. Read Data
+    data = get_geojson_content()
     
-    # Write files
-    write_index_html(json_str)
-    write_vercel_json()
-    
-    print(f"[SUCCESS] {INDEX_FILE} generated with embedded data.")
+    # 2. Write HTML
+    write_index_html(data)
+    print(f"✅ Generated '{INDEX_FILE}' with embedded data.")
+
+    # 3. Check for vercel.json (and warn user)
+    if Path("vercel.json").exists():
+        print("\n⚠️  WARNING: Found 'vercel.json'.")
+        print("   Please DELETE this file. It is causing your Vercel errors.")
 
     if "--serve" in sys.argv:
-        port = 8000
-        print(f"Opening http://localhost:{port} ...")
-        handler = http.server.SimpleHTTPRequestHandler
-        with socketserver.TCPServer(("", port), handler) as httpd:
-            webbrowser.open(f"http://localhost:{port}")
-            try: httpd.serve_forever()
-            except KeyboardInterrupt: pass
+        serve_local()
+    else:
+        print("\n🚀 NEXT STEPS:")
+        print(f"1. Delete 'vercel.json' if it exists.")
+        print(f"2. git add {INDEX_FILE}")
+        print(f"3. git commit -m 'Update map'")
+        print("4. git push")
 
 if __name__ == "__main__":
     main()
